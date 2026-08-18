@@ -143,7 +143,6 @@ export default function App() {
   const hoverRef = useRef(false);
   const focusRef = useRef(false);
   const dropdownOpenRef = useRef(false);
-  const menuElRef = useRef(null);
 
   // True mientras el menú o un dropdown estén en uso (evita re-renders que parpadeen)
   const menuActive = () => hoverRef.current || focusRef.current || dropdownOpenRef.current;
@@ -330,14 +329,6 @@ export default function App() {
 
   // Pausa el auto-ocultado mientras se interactúa (evita que los select se cierren)
   const pauseHide = useCallback(() => clearTimeout(hideTimer.current), []);
-
-  // Clic fuera del menú (sobre el video) lo esconde al instante
-  const hideMenuOnOutsideClick = useCallback((e) => {
-    if (menuElRef.current && !menuElRef.current.contains(e.target)) {
-      clearTimeout(hideTimer.current);
-      setShowMenu(false);
-    }
-  }, []);
 
   // Mantiene el menú visible mientras un dropdown esté abierto
   const handleDropdownOpenChange = useCallback(
@@ -615,7 +606,7 @@ export default function App() {
   };
 
   return (
-    <div className="fixed inset-0 bg-black overflow-hidden" onMouseDown={hideMenuOnOutsideClick}>
+    <div className="fixed inset-0 bg-black overflow-hidden">
       {/* Marco del video: centrado, con bordes negros cuando el CRT se activa */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div
@@ -643,7 +634,6 @@ export default function App() {
       )}
 
       <div
-        ref={menuElRef}
         className={`fixed inset-x-0 top-0 z-20 transition-opacity duration-300 select-none ${
           showMenu ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
