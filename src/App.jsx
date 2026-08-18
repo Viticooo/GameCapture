@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const HIDE_MENU_MS = 3000;
 const api = typeof window !== "undefined" ? window.api : null;
@@ -24,6 +25,92 @@ const SIZE_PRESETS = [
   { label: "1600x900", w: 1600, h: 900 },
   { label: "1920x1080", w: 1920, h: 1080 },
 ];
+
+/* ---------- Dropdown personalizado (evita el popup nativo del select) ---------- */
+function Dropdown({ label, value, placeholder, options, onChange, onOpenChange }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  const openMenu = () => {
+    const el = btnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    onOpenChange(open);
+    if (!open) return;
+    const closeIfOutside = (e) => {
+      const inBtn = btnRef.current?.contains(e.target);
+      const inMenu = menuRef.current?.contains(e.target);
+      if (!inBtn && !inMenu) setOpen(false);
+    };
+    const reposition = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, onOpenChange]);
+
+  const selected = options.find((o) => o.value === value);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <span className={fieldLabel}>{label}</span>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        className={`${control} min-w-[220px] flex items-center justify-between gap-2`}
+      >
+        <span className={value ? "text-amber-50" : "text-white/40"}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <span className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`}>▾</span>
+      </button>
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="fixed z-[60] max-h-64 overflow-auto rounded-xl bg-zinc-900/95 backdrop-blur-xl border border-white/10 shadow-2xl shadow-black/60"
+            style={{ top: pos.top, left: pos.left, width: pos.width }}
+          >
+            {options.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+                className={`block w-full text-left px-3 py-2 text-xs transition-colors ${
+                  o.value === value
+                    ? "bg-amber-400/15 text-amber-100"
+                    : "text-white/70 hover:bg-white/[0.06] hover:text-white"
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </div>
+  );
+}
 
 /* ---------- Clases de estilo (ámbar suave / vidrio) ---------- */
 const panel =
@@ -53,6 +140,12 @@ export default function App() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const hideTimer = useRef(null);
+  const hoverRef = useRef(false);
+  const focusRef = useRef(false);
+  const dropdownOpenRef = useRef(false);
+
+  // True mientras el menú o un dropdown estén en uso (evita re-renders que parpadeen)
+  const menuActive = () => hoverRef.current || focusRef.current || dropdownOpenRef.current;
 
   const [videoInputs, setVideoInputs] = useState([]);
   const [audioInputs, setAudioInputs] = useState([]);
@@ -67,6 +160,7 @@ export default function App() {
   const [crtMode, setCrtMode] = useState(false);
   const [showOsd, setShowOsd] = useState(false);
   const [fps, setFps] = useState(0);
+  const [sizeLabel, setSizeLabel] = useState("");
   const [videoRes, setVideoRes] = useState({ w: 0, h: 0 });
   const [filters, setFilters] = useState({ brightness: 100, contrast: 100, saturate: 100 });
   const [frame, setFrame] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -174,7 +268,7 @@ export default function App() {
     const loop = (t) => {
       frames += 1;
       if (t - last >= 500) {
-        setFps(Math.round((frames * 1000) / (t - last)));
+        if (!menuActive()) setFps(Math.round((frames * 1000) / (t - last)));
         frames = 0;
         last = t;
       }
@@ -193,7 +287,7 @@ export default function App() {
       if (v && v.videoWidth) {
         const res = videoResRef.current;
         if (v.videoWidth !== res.w || v.videoHeight !== res.h) {
-          setVideoRes({ w: v.videoWidth, h: v.videoHeight });
+          if (!menuActive()) setVideoRes({ w: v.videoWidth, h: v.videoHeight });
         }
       }
 
@@ -213,7 +307,7 @@ export default function App() {
       if (fw !== lastFrameW || fh !== lastFrameH) {
         lastFrameW = fw;
         lastFrameH = fh;
-        setFrame({ w: fw, h: fh });
+        if (!menuActive()) setFrame({ w: fw, h: fh });
       }
     };
     update();
@@ -228,11 +322,22 @@ export default function App() {
   const resetHideTimer = useCallback(() => {
     setShowMenu(true);
     clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => setShowMenu(false), HIDE_MENU_MS);
+    hideTimer.current = setTimeout(() => {
+      if (!hoverRef.current && !focusRef.current && !dropdownOpenRef.current) setShowMenu(false);
+    }, HIDE_MENU_MS);
   }, []);
 
   // Pausa el auto-ocultado mientras se interactúa (evita que los select se cierren)
   const pauseHide = useCallback(() => clearTimeout(hideTimer.current), []);
+
+  // Mantiene el menú visible mientras un dropdown esté abierto
+  const handleDropdownOpenChange = useCallback(
+    (v) => {
+      dropdownOpenRef.current = v;
+      resetHideTimer();
+    },
+    [resetHideTimer]
+  );
 
   useEffect(() => {
     resetHideTimer();
@@ -243,14 +348,12 @@ export default function App() {
     };
   }, [resetHideTimer]);
 
-  const onVideoChange = (e) => {
-    const v = e.target.value;
+  const onVideoChange = (v) => {
     setVideoId(v);
     startCapture(v, audioId, true);
   };
 
-  const onAudioChange = (e) => {
-    const a = e.target.value;
+  const onAudioChange = (a) => {
     setAudioId(a);
     startCapture(videoId, a, true);
   };
@@ -301,15 +404,17 @@ export default function App() {
         return (
           <div className="flex flex-wrap items-end gap-4" style={{ WebkitAppRegion: "no-drag" }}>
             <div className="flex flex-col gap-1">
-              <span className={fieldLabel}>Fuente de video</span>
-              <select value={videoId} onChange={onVideoChange} onFocus={pauseHide} onBlur={resetHideTimer} className={`${control} min-w-[220px]`}>
-                <option value="">Automático</option>
-                {videoInputs.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label || `Dispositivo ${d.deviceId.slice(0, 8)}`}
-                  </option>
-                ))}
-              </select>
+              <Dropdown
+                label="Fuente de video"
+                value={videoId}
+                placeholder="Automático"
+                options={videoInputs.map((d) => ({
+                  value: d.deviceId,
+                  label: d.label || `Dispositivo ${d.deviceId.slice(0, 8)}`,
+                }))}
+                onChange={onVideoChange}
+                onOpenChange={handleDropdownOpenChange}
+              />
             </div>
             <p className="text-[11px] text-white/35 max-w-[240px] leading-snug">
               Captura directa de la tarjeta UVC con latencia mínima (ideal 1920x1080 @ 60 fps).
@@ -320,15 +425,17 @@ export default function App() {
         return (
           <div className="flex flex-wrap items-end gap-4" style={{ WebkitAppRegion: "no-drag" }}>
             <div className="flex flex-col gap-1">
-              <span className={fieldLabel}>Fuente de audio</span>
-              <select value={audioId} onChange={onAudioChange} onFocus={pauseHide} onBlur={resetHideTimer} className={`${control} min-w-[220px]`}>
-                <option value="">Automático</option>
-                {audioInputs.map((d) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label || `Dispositivo ${d.deviceId.slice(0, 8)}`}
-                  </option>
-                ))}
-              </select>
+              <Dropdown
+                label="Fuente de audio"
+                value={audioId}
+                placeholder="Automático"
+                options={audioInputs.map((d) => ({
+                  value: d.deviceId,
+                  label: d.label || `Dispositivo ${d.deviceId.slice(0, 8)}`,
+                }))}
+                onChange={onAudioChange}
+                onOpenChange={handleDropdownOpenChange}
+              />
             </div>
             <div className="flex flex-col gap-1">
               <span className={fieldLabel}>Volumen</span>
@@ -364,27 +471,18 @@ export default function App() {
         return (
           <div className="flex flex-wrap items-end gap-4" style={{ WebkitAppRegion: "no-drag" }}>
             <div className="flex flex-col gap-1">
-              <span className={fieldLabel}>Tamaño de ventana</span>
-              <select
-                onChange={(e) => {
-                  const p = SIZE_PRESETS.find((x) => x.label === e.target.value);
+              <Dropdown
+                label="Tamaño de ventana"
+                value={sizeLabel}
+                placeholder="Selecciona"
+                options={SIZE_PRESETS.map((p) => ({ value: p.label, label: p.label }))}
+                onChange={(label) => {
+                  setSizeLabel(label);
+                  const p = SIZE_PRESETS.find((x) => x.label === label);
                   if (p) setWindowSize(p.w, p.h);
                 }}
-                onFocus={pauseHide}
-                onBlur={resetHideTimer}
-                defaultValue=""
-                title="Tamaño de ventana"
-                className={`${control} min-w-[140px]`}
-              >
-                <option value="" disabled>
-                  Selecciona
-                </option>
-                {SIZE_PRESETS.map((p) => (
-                  <option key={p.label} value={p.label}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
+                onOpenChange={handleDropdownOpenChange}
+              />
             </div>
             <div className="flex flex-col gap-1">
               <span className={fieldLabel}>Modo</span>
@@ -511,7 +609,10 @@ export default function App() {
     <div className="fixed inset-0 bg-black overflow-hidden">
       {/* Marco del video: centrado, con bordes negros cuando el CRT se activa */}
       <div className="absolute inset-0 flex items-center justify-center">
-        <div className="relative" style={{ width: frame.w, height: frame.h }}>
+        <div
+          className={`relative ${crtMode ? "overflow-hidden rounded-[28px]" : ""}`}
+          style={{ width: frame.w, height: frame.h }}
+        >
           <video
             ref={videoRef}
             className="w-full h-full object-contain"
@@ -543,6 +644,24 @@ export default function App() {
           <div
             className={`${panel} px-3 py-2.5 max-w-[98vw]`}
             style={{ WebkitAppRegion: "no-drag" }}
+            onMouseEnter={() => {
+              hoverRef.current = true;
+              resetHideTimer();
+            }}
+            onMouseLeave={() => {
+              hoverRef.current = false;
+              resetHideTimer();
+            }}
+            onFocusCapture={() => {
+              focusRef.current = true;
+              resetHideTimer();
+            }}
+            onBlurCapture={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget)) {
+                focusRef.current = false;
+                resetHideTimer();
+              }
+            }}
             onMouseDown={pauseHide}
             onMouseUp={resetHideTimer}
           >
